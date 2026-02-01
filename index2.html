@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Housemates — Tasks</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { margin: 0; background:#0b0d12; color:#e8ebf2; }
+    header { padding: 18px 20px; border-bottom: 1px solid #22283a; background:#0f1320; position: sticky; top:0; }
+    h1 { margin: 0; font-size: 18px; }
+    .sub { margin-top: 6px; color:#aeb6d2; font-size: 13px; }
+    main { padding: 18px 20px; max-width: 1050px; margin: 0 auto; }
+    .row { display:flex; gap:12px; flex-wrap: wrap; align-items:center; }
+    button {
+      background:#2a6cff; color:white; border:0; padding:10px 12px;
+      border-radius: 10px; cursor:pointer; font-weight: 600;
+    }
+    button.secondary { background:#1b2236; color:#d7def7; border:1px solid #2a365a; }
+    button.danger { background:#c43131; }
+    .card {
+      background:#0f1320; border:1px solid #22283a; border-radius: 14px;
+      padding: 14px; margin: 12px 0;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    }
+    .grid { display:grid; grid-template-columns: 1fr; gap:12px; }
+    @media (min-width: 900px) { .grid { grid-template-columns: 1.2fr .8fr; } }
+    table { width:100%; border-collapse: collapse; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid #22283a; font-size: 14px; vertical-align: top; }
+    th { text-align:left; color:#aeb6d2; font-weight: 700; }
+    .pill { display:inline-flex; gap:8px; align-items:center; padding:6px 10px; border-radius:999px; border:1px solid #2a365a; background:#121a2f; }
+    .muted { color:#aeb6d2; }
+    .small { font-size: 12px; }
+    .task { display:flex; gap:10px; align-items:flex-start; }
+    .task label { cursor:pointer; }
+    .kpi { display:flex; gap:10px; flex-wrap: wrap; }
+    .kpi .box { padding:10px 12px; border:1px solid #22283a; border-radius: 12px; background:#0c1020; }
+    .ok { color:#6ee7b7; font-weight: 700; }
+    .warn { color:#fde68a; font-weight: 700; }
+    details summary { cursor:pointer; color:#d7def7; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .right { text-align:right; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #2a365a; background:#121a2f; }
+  </style>
+</head>
+
+<body>
+<header>
+  <h1>Housemates — Task Tracking</h1>
+  <div class="sub" id="weekLine"></div>
+</header>
+
+<main>
+  <div class="row">
+    <button id="btnGenerate">Recompute this week</button>
+    <button class="secondary" id="btnToggleMode">Scoring mode: <span id="modeLabel"></span></button>
+    <button class="secondary" id="btnExport">Export JSON (week)</button>
+    <span class="muted small" id="status"></span>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2 style="margin:0 0 10px 0; font-size:16px;">This week’s schedule</h2>
+      <div class="muted small" style="margin-bottom:12px;">
+        Point balancing via <span class="mono">greedy</span> (higher points → least loaded person).
+        Shared online state (everyone sees the checkmarks).
+      </div>
+      <div id="schedule"></div>
+    </section>
+
+    <aside class="card">
+      <h2 style="margin:0 0 10px 0; font-size:16px;">Scores</h2>
+      <div class="kpi" id="kpis"></div>
+      <div class="muted small" style="margin-top:10px;">
+        “Assigned” balances fairness “on paper”, while “done” balances fairness “in reality”.
+      </div>
+    </aside>
+  </div>
+
+  <section class="card">
+    <details>
+      <summary>History (points per week)</summary>
+      <div id="history"></div>
+    </details>
+  </section>
+</main>
+
+<script type="module">
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+
+  /** =======================
+   *  CONFIG TO FILL IN
+   *  ======================= */
+  const SUPABASE_URL = "https://cakvyvxclyjqfbacqrzg.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNha3Z5dnhjbHlqcWZiYWNxcnpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk5NDY1NTcsImV4cCI6MjA4NTUyMjU1N30.p447fGnnhR8nS8EDSVsfMaP9eVfpQB2FscuyQC-65B4";
+  const ROOM_KEY = "coloc-xxxxx"; // must match the SQL (policies)
+
+  const TABLE = "coloc_weeks";
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  /** =======================
+   *  Data (your rules)
+   *  ======================= */
+  const PEOPLE = ["Andrea","Aditya","Aymeric","Francesco","Marco","Leonardo"];
+
+  const BATHROOMS = {
+    "Bathroom 1 (Adi/Aymeric/Francesco)": ["Aditya","Aymeric","Francesco"],
+    "Bathroom 2 (Andrea/Marco/Leonardo)": ["Andrea","Marco","Leonardo"]
+  };
+
+  const COMMON_TASKS = [
+    { id:"surfaces_salon", name:"Living room surfaces", pts:2, pool:"all" },
+    { id:"surfaces_cuisine", name:"Kitchen surfaces", pts:4, pool:"all" },
+    { id:"aspirateur_salon_couloir", name:"Vacuum living room + hallway", pts:5, pool:"all" },
+    { id:"aspirateur_cuisine", name:"Vacuum kitchen", pts:2, pool:"all" },
+    { id:"serpilliere_salon_couloir", name:"Mop living room + hallway", pts:5, pool:"all" },
+    { id:"serpilliere_cuisine", name:"Mop kitchen", pts:2, pool:"all" },
+  ];
+
+  const BATHROOM_TASKS = [
+    { id:"sdb_sol", name:"Bathroom: vacuum + mop", pts:2 },
+    { id:"sdb_surfaces", name:"Bathroom: surfaces", pts:5 },
+  ];
+
+  /** =======================
+   *  Time helpers / ISO week (Europe/Rome)
+   *  ======================= */
+  function isoWeekKey(date = new Date()) {
+    const romeStr = date.toLocaleString("sv-SE", { timeZone: "Europe/Rome" }); // "YYYY-MM-DD HH:mm:ss"
+    const d = new Date(romeStr.replace(" ", "T") + "Z");
+
+    const tmp = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    const dayNum = tmp.getUTCDay() || 7;
+    tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(),0,1));
+    const weekNo = Math.ceil((((tmp - yearStart) / 86400000) + 1) / 7);
+    const year = tmp.getUTCFullYear();
+    return `${year}-W${String(weekNo).padStart(2,"0")}`;
+  }
+
+  /** =======================
+   *  Scoring / generation
+   *  ======================= */
+  function scoreValue(totals, person, mode) {
+    return mode === "done" ? totals[person].done : totals[person].assigned;
+  }
+
+  function computeTotals(allWeeks, uptoWeekKey=null) {
+    const totals = {};
+    PEOPLE.forEach(p => totals[p] = { assigned:0, done:0 });
+
+    const keys = Object.keys(allWeeks).sort();
+    for (const wk of keys) {
+      if (uptoWeekKey && wk > uptoWeekKey) break;
+      const w = allWeeks[wk];
+      for (const a of (w.assignments || [])) {
+        totals[a.person].assigned += a.pts;
+        if (w.done && w.done[a.taskKey]) totals[a.person].done += a.pts;
+      }
+    }
+    return totals;
+  }
+
+  function assignTasksGreedy(tasks, eligiblePeople, totalsPrev, mode) {
+    const sorted = [...tasks].sort((a,b) => b.pts - a.pts);
+    const assignments = [];
+    const localScore = {};
+    eligiblePeople.forEach(p => localScore[p] = scoreValue(totalsPrev, p, mode));
+
+    for (const t of sorted) {
+      eligiblePeople.sort((p1,p2) => localScore[p1] - localScore[p2] || p1.localeCompare(p2));
+      const pick = eligiblePeople[0];
+      assignments.push({ ...t, person: pick });
+      localScore[pick] += t.pts;
+    }
+    return assignments;
+  }
+
+  function totalsBeforeWeek(allWeeks, weekKey) {
+    // accumulate only weeks strictly < weekKey (ISO lexical order is OK)
+    const totals = {};
+    PEOPLE.forEach(p => totals[p] = { assigned: 0, done: 0 });
+
+    const keys = Object.keys(allWeeks).sort();
+    for (const wk of keys) {
+      if (wk >= weekKey) break;
+      const w = allWeeks[wk];
+      for (const a of (w.assignments || [])) {
+        totals[a.person].assigned += a.pts;
+        if (w.done && w.done[a.taskKey]) totals[a.person].done += a.pts;
+      }
+    }
+    return totals;
+  }
+
+  function assignCommonOneEach(commonTasksWithKeys, totalsPrev, mode) {
+    // commonTasksWithKeys = [{taskKey, id, name, pts, pool}, ...]
+    const tasks = [...commonTasksWithKeys].sort((a,b) => b.pts - a.pts || a.taskKey.localeCompare(b.taskKey));
+
+    // local score = balancing metric (assigned or done)
+    const score = {};
+    for (const p of PEOPLE) score[p] = scoreValue(totalsPrev, p, mode);
+
+    const k = Math.min(PEOPLE.length, tasks.length);
+    const peopleSorted = [...PEOPLE].sort((p1,p2) => score[p1] - score[p2] || p1.localeCompare(p2));
+
+    const assignments = [];
+    // seed: 1 task per person
+    for (let i = 0; i < k; i++) {
+      const p = peopleSorted[i];
+      const t = tasks[i];
+      assignments.push({ ...t, person: p });
+      score[p] += t.pts;
+    }
+
+    // if any common tasks remain (if you add more in the future), assign them greedily
+    const remaining = tasks.slice(k);
+    if (remaining.length) {
+      // adapt greedy by passing a "virtual" totalsPrev
+      const fakeTotals = {};
+      for (const p of PEOPLE) fakeTotals[p] = { assigned: score[p], done: score[p] }; // same value for the metric
+      assignments.push(...assignTasksGreedy(remaining, [...PEOPLE], fakeTotals, "assigned"));
+    }
+
+    // If tasks < PEOPLE, we cannot guarantee 1 task each (math impossible)
+    return assignments;
+  }
+
+  function buildWeekState(allWeeks, weekKey, mode) {
+    // totals before this week
+    const totalsPrev = totalsBeforeWeek(allWeeks, weekKey);
+
+    // Common
+    const commonAssignments = assignCommonOneEach(
+      COMMON_TASKS.map(t => ({...t, taskKey:`all:${t.id}`})),
+      totalsPrev,
+      mode
+    );
+
+    // Bathrooms
+    const bathroomAssignments = [];
+    for (const [bathName, members] of Object.entries(BATHROOMS)) {
+      const tasks = BATHROOM_TASKS.map(t => ({
+        id: t.id,
+        name: `${t.name} — ${bathName}`,
+        pts: t.pts,
+        pool: bathName,
+        taskKey: `bath:${bathName}:${t.id}`
+      }));
+      bathroomAssignments.push(...assignTasksGreedy(tasks, [...members], totalsPrev, mode));
+    }
+
+    const assignments = [...commonAssignments, ...bathroomAssignments].map(a => ({
+      taskKey: a.taskKey,
+      taskName: a.name,
+      pts: a.pts,
+      person: a.person,
+      pool: a.pool ?? "all"
+    }));
+
+    // if the week already exists, keep the checkmarks (done)
+    const existingDone = allWeeks[weekKey]?.done || {};
+    return { assignments, done: existingDone, mode, createdAt: allWeeks[weekKey]?.createdAt || new Date().toISOString() };
+  }
+
+  function prevWeekKey(weekKey) {
+    // weekKey: "YYYY-Www"
+    // Not used anymore (kept for compatibility)
+    return null;
+  }
+
+  /** =======================
+   *  DB
+   *  ======================= */
+  const $status = document.getElementById("status");
+  function setStatus(msg) { $status.textContent = msg; }
+
+  async function fetchAllWeeks() {
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("week_key,state,updated_at")
+      .eq("room_key", ROOM_KEY)
+      .order("week_key", { ascending: true });
+
+    if (error) throw error;
+
+    const map = {};
+    for (const row of data) map[row.week_key] = row.state;
+    return map;
+  }
+
+  async function upsertWeek(weekKey, state) {
+    const payload = { room_key: ROOM_KEY, week_key: weekKey, state, updated_at: new Date().toISOString() };
+    const { error } = await supabase.from(TABLE).upsert(payload);
+    if (error) throw error;
+  }
+
+  async function updateDone(weekKey, doneMap) {
+    // simple patch: read the row then rewrite state.done
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("state")
+      .eq("room_key", ROOM_KEY)
+      .eq("week_key", weekKey)
+      .single();
+    if (error) throw error;
+
+    const state = data.state;
+    state.done = doneMap;
+    state.updatedAt = new Date().toISOString();
+    await upsertWeek(weekKey, state);
+  }
+
+  /** =======================
+   *  UI rendering
+   *  ======================= */
+  function render(weekKey, allWeeks) {
+    const week = allWeeks[weekKey];
+    document.getElementById("weekLine").innerHTML =
+      `Current week: <span class="mono badge">${weekKey}</span> — timezone Europe/Rome`;
+
+    document.getElementById("modeLabel").textContent = (week.mode === "assigned") ? "assigned" : "done";
+
+    // Schedule by person
+    const byPerson = {};
+    PEOPLE.forEach(p => byPerson[p] = []);
+    for (const a of week.assignments) byPerson[a.person].push(a);
+    for (const p of PEOPLE) byPerson[p].sort((x,y) => y.pts - x.pts);
+
+    const scheduleDiv = document.getElementById("schedule");
+    scheduleDiv.innerHTML = "";
+
+    const table = document.createElement("table");
+    table.innerHTML = `
+      <thead>
+        <tr>
+          <th>Person</th>
+          <th>Tasks</th>
+          <th class="right">Points (week)</th>
+        </tr>
+      </thead>
+    `;
+    const tbody = document.createElement("tbody");
+
+    for (const p of PEOPLE) {
+      const tasks = byPerson[p];
+      const ptsWeek = tasks.reduce((s,t)=>s+t.pts,0);
+
+      const tdTasks = document.createElement("td");
+      for (const t of tasks) {
+        const wrap = document.createElement("div");
+        wrap.className = "task";
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!week.done?.[t.taskKey];
+        cb.addEventListener("change", async () => {
+          const newDone = { ...(week.done || {}) };
+          newDone[t.taskKey] = cb.checked;
+          week.done = newDone; // update local
+          setStatus("Saving…");
+          try {
+            await updateDone(weekKey, newDone);
+            setStatus("OK (synced)");
+            renderScores(allWeeks); // refresh scores
+          } catch (e) {
+            console.error(e);
+            setStatus("Save error");
+            alert("Error: could not save. See console.");
+          }
+        });
+
+        const label = document.createElement("label");
+        label.innerHTML = `<span>${t.taskName}</span> <span class="muted small">(${t.pts} pts)</span>`;
+        wrap.appendChild(cb);
+        wrap.appendChild(label);
+        tdTasks.appendChild(wrap);
+      }
+
+      const tr = document.createElement("tr");
+      const tdP = document.createElement("td");
+      tdP.innerHTML = `<span class="pill"><b>${p}</b></span>`;
+      const tdPts = document.createElement("td");
+      tdPts.className = "right";
+      tdPts.innerHTML = `<b>${ptsWeek}</b>`;
+
+      tr.appendChild(tdP);
+      tr.appendChild(tdTasks);
+      tr.appendChild(tdPts);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    scheduleDiv.appendChild(table);
+
+    renderScores(allWeeks);
+    renderHistory(allWeeks);
+  }
+
+  function renderScores(allWeeks) {
+    const kpis = document.getElementById("kpis");
+    kpis.innerHTML = "";
+
+    // metric used to balance = current week's mode (last weekKey)
+    const keys = Object.keys(allWeeks).sort();
+    const currentMode = allWeeks[keys[keys.length - 1]]?.mode || "assigned";
+
+    const totals = computeTotals(allWeeks);
+    const values = PEOPLE.map(p => scoreValue(totals, p, currentMode));
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+
+    for (const p of PEOPLE) {
+      const v = scoreValue(totals, p, currentMode);
+      const box = document.createElement("div");
+      box.className = "box";
+      const status = (v === min) ? "ok" : (v === max ? "warn" : "");
+      box.innerHTML = `
+        <div><b>${p}</b></div>
+        <div class="mono ${status}">${v} pts</div>
+        <div class="muted small">assigned: ${totals[p].assigned} — done: ${totals[p].done}</div>
+      `;
+      kpis.appendChild(box);
+    }
+  }
+
+  function renderHistory(allWeeks) {
+    const histDiv = document.getElementById("history");
+    const keys = Object.keys(allWeeks).sort().reverse();
+    histDiv.innerHTML = "";
+
+    const t = document.createElement("table");
+    t.innerHTML = `
+      <thead>
+        <tr>
+          <th>Week</th>
+          <th>Assigned</th>
+          <th>Done</th>
+        </tr>
+      </thead>
+    `;
+    const tb = document.createElement("tbody");
+
+    for (const wk of keys) {
+      const w = allWeeks[wk];
+      const totA = (w.assignments || []).reduce((s,a)=>s+a.pts,0);
+      const totD = (w.assignments || []).reduce((s,a)=> s + ((w.done && w.done[a.taskKey]) ? a.pts : 0), 0);
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><span class="mono">${wk}</span></td>
+        <td><b>${totA}</b></td>
+        <td><b>${totD}</b></td>
+      `;
+      tb.appendChild(tr);
+    }
+    t.appendChild(tb);
+    histDiv.appendChild(t);
+  }
+
+  /** =======================
+   *  Boot + auto-generation
+   *  ======================= */
+  async function fetchWeekState(weekKey) {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select("state")
+    .eq("room_key", ROOM_KEY)
+    .eq("week_key", weekKey)
+    .single();
+
+  if (error) throw error;
+  return data.state;
+}
+
+  async function ensureCurrentWeek(allWeeks, weekKey) {
+  // 0) If we already have it locally, nothing to do
+  if (allWeeks[weekKey]) return;
+
+  // 1) Try to read from DB first (fast path)
+  try {
+    const state = await fetchWeekState(weekKey);
+    allWeeks[weekKey] = state;
+    return;
+  } catch (e) {
+    // likely "not found" -> we'll create
+  }
+
+  // 2) Build the week state
+  const lastKey = Object.keys(allWeeks).sort().pop();
+  const mode = lastKey ? (allWeeks[lastKey].mode || "assigned") : "assigned";
+  const stateToInsert = buildWeekState(allWeeks, weekKey, mode);
+
+  // 3) Attempt INSERT (create-once). If someone else creates it simultaneously,
+  //    INSERT will fail due to the primary key constraint, and we re-read.
+  const { error: insertError } = await supabase
+    .from(TABLE)
+    .insert({
+      room_key: ROOM_KEY,
+      week_key: weekKey,
+      state: stateToInsert,
+      updated_at: new Date().toISOString(),
+    });
+
+  if (!insertError) {
+    allWeeks[weekKey] = stateToInsert;
+    return;
+  }
+
+  // 4) If insert failed, re-read canonical state from DB (someone else created it)
+  const canonical = await fetchWeekState(weekKey);
+  allWeeks[weekKey] = canonical;
+}
+
+
+  async function recalcWeek(allWeeks, weekKey, mode) {
+    const state = buildWeekState(allWeeks, weekKey, mode);
+    allWeeks[weekKey] = state;
+    await upsertWeek(weekKey, state);
+  }
+
+  async function main() {
+    setStatus("Loading…");
+    const weekKey = isoWeekKey(new Date());
+    let allWeeks = await fetchAllWeeks();
+
+    await ensureCurrentWeek(allWeeks, weekKey);
+
+    // Lock recompute so the schedule stays identical all week
+    const genBtn = document.getElementById("btnGenerate");
+    genBtn.disabled = true;
+    genBtn.textContent = "Locked (this week)";
+    const modeBtn = document.getElementById("btnToggleMode");
+    modeBtn.disabled = true;
+
+
+
+    setStatus("OK (synced)");
+    render(weekKey, allWeeks);
+
+    // Buttons
+    document.getElementById("btnGenerate").onclick = async () => {
+      setStatus("Recomputing…");
+      try {
+        allWeeks = await fetchAllWeeks();
+        const mode = allWeeks[weekKey]?.mode || "assigned";
+        await recalcWeek(allWeeks, weekKey, mode);
+        setStatus("OK (recomputed)");
+        render(weekKey, allWeeks);
+      } catch (e) {
+        console.error(e);
+        setStatus("Recompute error");
+        alert("Error: could not recompute. See console.");
+      }
+    };
+
+    document.getElementById("btnToggleMode").onclick = async () => {
+      setStatus("Switching mode…");
+      try {
+        allWeeks = await fetchAllWeeks();
+        const current = allWeeks[weekKey];
+        const newMode = (current.mode === "assigned") ? "done" : "assigned";
+        await recalcWeek(allWeeks, weekKey, newMode);
+        setStatus("OK (mode switched)");
+        render(weekKey, allWeeks);
+      } catch (e) {
+        console.error(e);
+        setStatus("Mode switch error");
+        alert("Error: could not switch mode. See console.");
+      }
+    };
+
+    document.getElementById("btnExport").onclick = () => {
+      const week = allWeeks[weekKey];
+      const blob = new Blob([JSON.stringify({weekKey, roomKey: ROOM_KEY, state: week}, null, 2)], {type:"application/json"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `coloc_${ROOM_KEY}_${weekKey}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    // Realtime: if someone else checks a task, update the screen
+    try {
+      const channel = supabase.channel("coloc-weeks-realtime");
+      channel.on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: TABLE, filter: `room_key=eq.${ROOM_KEY}` },
+        async (payload) => {
+          // light reload
+          allWeeks = await fetchAllWeeks();
+          render(weekKey, allWeeks);
+          setStatus("OK (live update)");
+        }
+      );
+      await channel.subscribe();
+    } catch (e) {
+      console.warn("Realtime not active", e);
+      // Not blocking: the page still works
+    }
+  }
+
+  main().catch(e => {
+    console.error(e);
+    setStatus("Load error");
+    alert("Error: check SUPABASE_URL / ANON_KEY / RLS policies.");
+  });
+</script>
+</body>
+</html>
