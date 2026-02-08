@@ -10,14 +10,14 @@
     header { padding: 18px 20px; border-bottom: 1px solid #22283a; background:#0f1320; position: sticky; top:0; }
     h1 { margin: 0; font-size: 18px; }
     .sub { margin-top: 6px; color:#aeb6d2; font-size: 13px; }
-    main { padding: 18px 20px; max-width: 1050px; margin: 0 auto; }
+    main { padding: 18px 20px; max-width: 1100px; margin: 0 auto; }
     .row { display:flex; gap:12px; flex-wrap: wrap; align-items:center; }
     button {
       background:#2a6cff; color:white; border:0; padding:10px 12px;
       border-radius: 10px; cursor:pointer; font-weight: 600;
     }
     button.secondary { background:#1b2236; color:#d7def7; border:1px solid #2a365a; }
-    button.danger { background:#c43131; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
     .card {
       background:#0f1320; border:1px solid #22283a; border-radius: 14px;
       padding: 14px; margin: 12px 0;
@@ -31,16 +31,20 @@
     .pill { display:inline-flex; gap:8px; align-items:center; padding:6px 10px; border-radius:999px; border:1px solid #2a365a; background:#121a2f; }
     .muted { color:#aeb6d2; }
     .small { font-size: 12px; }
-    .task { display:flex; gap:10px; align-items:flex-start; }
+    .task { display:flex; gap:10px; align-items:flex-start; margin: 6px 0; }
     .task label { cursor:pointer; }
     .kpi { display:flex; gap:10px; flex-wrap: wrap; }
-    .kpi .box { padding:10px 12px; border:1px solid #22283a; border-radius: 12px; background:#0c1020; }
+    .kpi .box { padding:10px 12px; border:1px solid #22283a; border-radius: 12px; background:#0c1020; min-width:190px; }
     .ok { color:#6ee7b7; font-weight: 700; }
     .warn { color:#fde68a; font-weight: 700; }
     details summary { cursor:pointer; color:#d7def7; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     .right { text-align:right; }
     .badge { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #2a365a; background:#121a2f; }
+    .notice { border:1px solid #2a365a; background:#121a2f; border-radius:12px; padding:10px 12px; }
+    .pink { color:#ff66cc; font-weight:800; }
+    .green { color:#6ee7b7; font-weight:800; }
+    .yellow { color:#fde68a; font-weight:800; }
   </style>
 </head>
 
@@ -53,27 +57,45 @@
 <main>
   <div class="row">
     <button id="btnGenerate">Recompute this week</button>
-    <button class="secondary" id="btnToggleMode">Scoring mode: <span id="modeLabel"></span></button>
+    <button class="secondary" id="btnRecapCopy">Weekly recap (copy)</button>
+    <button class="secondary" id="btnRecapWA">Weekly recap (WhatsApp)</button>
     <button class="secondary" id="btnExport">Export JSON (week)</button>
     <span class="muted small" id="status"></span>
   </div>
+
+  <!-- Admin-only absences -->
+  <section class="card" id="absencesPanel" style="display:none;">
+    <h2 style="margin:0 0 10px 0; font-size:16px;">Absences (admin only)</h2>
+    <div class="muted small">
+      Mark who is away this week, then click <b>Save absences + recompute</b>.
+      Away people receive <b>no tasks</b>.
+      If someone returns after being away last week, their <b>done score</b> is set to the <b>average of present people</b>.
+    </div>
+    <div id="absences" style="margin-top:10px;"></div>
+    <div class="row" style="margin-top:12px;">
+      <button class="secondary" id="btnSaveAbsences">Save absences + recompute</button>
+    </div>
+    <div class="muted small" style="margin-top:10px;">
+      Admin link example: <span class="mono">.../#admin=TiensVoilaDuBoudin</span>
+    </div>
+  </section>
 
   <div class="grid">
     <section class="card">
       <h2 style="margin:0 0 10px 0; font-size:16px;">This week’s schedule</h2>
       <div class="muted small" style="margin-bottom:12px;">
-        Point balancing via <span class="mono">greedy</span> (higher points → least loaded person).
-        Shared online state (everyone sees the checkmarks).
+        Main score uses <b>done points only</b> (points count only when checked).
+        Everyone sees the same schedule all week.
       </div>
       <div id="schedule"></div>
     </section>
 
     <aside class="card">
       <h2 style="margin:0 0 10px 0; font-size:16px;">Scores</h2>
-      <div class="kpi" id="kpis"></div>
-      <div class="muted small" style="margin-top:10px;">
-        “Assigned” balances fairness “on paper”, while “done” balances fairness “in reality”.
+      <div class="notice muted small" style="margin-bottom:10px;">
+        <span class="pink">bitch</span> appears if you did <b>not</b> finish all your tasks in the <b>last finished week</b>.
       </div>
+      <div class="kpi" id="kpis"></div>
     </aside>
   </div>
 
@@ -86,20 +108,35 @@
 </main>
 
 <script type="module">
-  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
   /** =======================
-   *  CONFIG TO FILL IN
+   *  CONFIG
    *  ======================= */
   const SUPABASE_URL = "https://cakvyvxclyjqfbacqrzg.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNha3Z5dnhjbHlqcWZiYWNxcnpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk5NDY1NTcsImV4cCI6MjA4NTUyMjU1N30.p447fGnnhR8nS8EDSVsfMaP9eVfpQB2FscuyQC-65B4";
-  const ROOM_KEY = "coloc-xxxxx"; // must match the SQL (policies)
+  const ROOM_KEY = "coloc-xxxxx"; // MUST match your SQL policies
 
   const TABLE = "coloc_weeks";
   const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+  // Meta row key (stores done offsets)
+  const META_WEEK_KEY = "__meta__";
+
+  // ADMIN secret in URL hash: #admin=TiensVoilaDuBoudin
+  const ADMIN_SECRET = "TiensVoilaDuBoudin";
+
+  function getHashParam(key) {
+    const h = (location.hash || "").replace(/^#/, "");
+    const params = new URLSearchParams(h);
+    return params.get(key);
+  }
+  function isAdmin() {
+    return getHashParam("admin") === ADMIN_SECRET;
+  }
+
   /** =======================
-   *  Data (your rules)
+   *  Data
    *  ======================= */
   const PEOPLE = ["Andrea","Aditya","Aymeric","Francesco","Marco","Leonardo"];
 
@@ -126,7 +163,7 @@
    *  Time helpers / ISO week (Europe/Rome)
    *  ======================= */
   function isoWeekKey(date = new Date()) {
-    const romeStr = date.toLocaleString("sv-SE", { timeZone: "Europe/Rome" }); // "YYYY-MM-DD HH:mm:ss"
+    const romeStr = date.toLocaleString("sv-SE", { timeZone: "Europe/Rome" });
     const d = new Date(romeStr.replace(" ", "T") + "Z");
 
     const tmp = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -139,49 +176,53 @@
   }
 
   /** =======================
-   *  Scoring / generation
+   *  Meta offsets (for return fairness)
    *  ======================= */
-  function scoreValue(totals, person, mode) {
-    return mode === "done" ? totals[person].done : totals[person].assigned;
+  function ensureMetaLocal(allWeeks) {
+    if (!allWeeks[META_WEEK_KEY]) allWeeks[META_WEEK_KEY] = { offsets_done: {} };
+    allWeeks[META_WEEK_KEY].offsets_done ||= {};
+    for (const p of PEOPLE) {
+      if (typeof allWeeks[META_WEEK_KEY].offsets_done[p] !== "number") {
+        allWeeks[META_WEEK_KEY].offsets_done[p] = 0;
+      }
+    }
   }
 
-  function computeTotals(allWeeks, uptoWeekKey=null) {
+  function applyOffsetsDone(totals, allWeeks) {
+    ensureMetaLocal(allWeeks);
+    const offsets = allWeeks[META_WEEK_KEY].offsets_done || {};
+    for (const p of PEOPLE) totals[p].done += (offsets[p] || 0);
+    return totals;
+  }
+
+  async function saveMeta(allWeeks) {
+    ensureMetaLocal(allWeeks);
+    await upsertWeek(META_WEEK_KEY, allWeeks[META_WEEK_KEY]);
+  }
+
+  /** =======================
+   *  Totals (assigned + done)
+   *  ======================= */
+  function computeTotals(allWeeks) {
     const totals = {};
     PEOPLE.forEach(p => totals[p] = { assigned:0, done:0 });
 
-    const keys = Object.keys(allWeeks).sort();
+    const keys = Object.keys(allWeeks).filter(k => k !== META_WEEK_KEY).sort();
     for (const wk of keys) {
-      if (uptoWeekKey && wk > uptoWeekKey) break;
       const w = allWeeks[wk];
       for (const a of (w.assignments || [])) {
         totals[a.person].assigned += a.pts;
         if (w.done && w.done[a.taskKey]) totals[a.person].done += a.pts;
       }
     }
-    return totals;
-  }
-
-  function assignTasksGreedy(tasks, eligiblePeople, totalsPrev, mode) {
-    const sorted = [...tasks].sort((a,b) => b.pts - a.pts);
-    const assignments = [];
-    const localScore = {};
-    eligiblePeople.forEach(p => localScore[p] = scoreValue(totalsPrev, p, mode));
-
-    for (const t of sorted) {
-      eligiblePeople.sort((p1,p2) => localScore[p1] - localScore[p2] || p1.localeCompare(p2));
-      const pick = eligiblePeople[0];
-      assignments.push({ ...t, person: pick });
-      localScore[pick] += t.pts;
-    }
-    return assignments;
+    return applyOffsetsDone(totals, allWeeks);
   }
 
   function totalsBeforeWeek(allWeeks, weekKey) {
-    // accumulate only weeks strictly < weekKey (ISO lexical order is OK)
     const totals = {};
-    PEOPLE.forEach(p => totals[p] = { assigned: 0, done: 0 });
+    PEOPLE.forEach(p => totals[p] = { assigned:0, done:0 });
 
-    const keys = Object.keys(allWeeks).sort();
+    const keys = Object.keys(allWeeks).filter(k => k !== META_WEEK_KEY).sort();
     for (const wk of keys) {
       if (wk >= weekKey) break;
       const w = allWeeks[wk];
@@ -190,54 +231,119 @@
         if (w.done && w.done[a.taskKey]) totals[a.person].done += a.pts;
       }
     }
-    return totals;
+    return applyOffsetsDone(totals, allWeeks);
   }
 
-  function assignCommonOneEach(commonTasksWithKeys, totalsPrev, mode) {
-    // commonTasksWithKeys = [{taskKey, id, name, pts, pool}, ...]
+  /** =======================
+   *  Absences + return logic
+   *  ======================= */
+  function getActivePeople(absentList) {
+    const absent = new Set(absentList || []);
+    return PEOPLE.filter(p => !absent.has(p));
+  }
+
+  function lastWeekKeyBefore(allWeeks, weekKey) {
+    const keys = Object.keys(allWeeks).filter(k => k !== META_WEEK_KEY).sort();
+    let prev = null;
+    for (const k of keys) {
+      if (k < weekKey) prev = k; else break;
+    }
+    return prev;
+  }
+
+  function computeReturningPeople(allWeeks, weekKey, absentNow) {
+    const prevKey = lastWeekKeyBefore(allWeeks, weekKey);
+    if (!prevKey) return [];
+    const prevAbsent = new Set(allWeeks[prevKey]?.absent || []);
+    const nowAbsent = new Set(absentNow || []);
+    return PEOPLE.filter(p => prevAbsent.has(p) && !nowAbsent.has(p));
+  }
+
+  function setReturnersToAverageDone(allWeeks, weekKey, absentNow) {
+    // adjust offsets so returners' done totals == avg(done of present others)
+    ensureMetaLocal(allWeeks);
+
+    const returners = computeReturningPeople(allWeeks, weekKey, absentNow);
+    if (!returners.length) return;
+
+    const totals = computeTotals(allWeeks); // includes existing offsets
+    const active = getActivePeople(absentNow);
+
+    for (const r of returners) {
+      const others = active.filter(p => p !== r);
+      if (!others.length) continue;
+
+      const avg = others.reduce((s,p) => s + totals[p].done, 0) / others.length;
+      const current = totals[r].done;
+
+      const delta = avg - current; // could be positive or negative
+      allWeeks[META_WEEK_KEY].offsets_done[r] = (allWeeks[META_WEEK_KEY].offsets_done[r] || 0) + delta;
+    }
+  }
+
+  /** =======================
+   *  Assignment helpers
+   *  ======================= */
+  function assignTasksGreedy(tasks, eligiblePeople, baseScoreMap) {
+    const sorted = [...tasks].sort((a,b) => (b.pts - a.pts) || (a.taskKey||"").localeCompare(b.taskKey||""));
+    const pool = [...eligiblePeople];
+    if (!pool.length) return [];
+
+    const score = { ...baseScoreMap };
+    const out = [];
+
+    for (const t of sorted) {
+      pool.sort((p1,p2) => score[p1] - score[p2] || p1.localeCompare(p2));
+      const pick = pool[0];
+      out.push({ ...t, person: pick });
+      score[pick] += t.pts;
+    }
+    return out;
+  }
+
+  function assignCommonOneEach(commonTasksWithKeys, peoplePool, baseScoreMap) {
+    const pool = [...peoplePool];
+    if (!pool.length) return [];
+
     const tasks = [...commonTasksWithKeys].sort((a,b) => b.pts - a.pts || a.taskKey.localeCompare(b.taskKey));
+    const score = { ...baseScoreMap };
 
-    // local score = balancing metric (assigned or done)
-    const score = {};
-    for (const p of PEOPLE) score[p] = scoreValue(totalsPrev, p, mode);
-
-    const k = Math.min(PEOPLE.length, tasks.length);
-    const peopleSorted = [...PEOPLE].sort((p1,p2) => score[p1] - score[p2] || p1.localeCompare(p2));
+    const k = Math.min(pool.length, tasks.length);
+    const peopleSorted = [...pool].sort((p1,p2) => score[p1] - score[p2] || p1.localeCompare(p2));
 
     const assignments = [];
-    // seed: 1 task per person
-    for (let i = 0; i < k; i++) {
+    for (let i=0; i<k; i++) {
       const p = peopleSorted[i];
       const t = tasks[i];
       assignments.push({ ...t, person: p });
       score[p] += t.pts;
     }
 
-    // if any common tasks remain (if you add more in the future), assign them greedily
     const remaining = tasks.slice(k);
     if (remaining.length) {
-      // adapt greedy by passing a "virtual" totalsPrev
-      const fakeTotals = {};
-      for (const p of PEOPLE) fakeTotals[p] = { assigned: score[p], done: score[p] }; // same value for the metric
-      assignments.push(...assignTasksGreedy(remaining, [...PEOPLE], fakeTotals, "assigned"));
+      assignments.push(...assignTasksGreedy(remaining, pool, score));
     }
-
-    // If tasks < PEOPLE, we cannot guarantee 1 task each (math impossible)
     return assignments;
   }
 
-  function buildWeekState(allWeeks, weekKey, mode) {
-    // totals before this week
-    const totalsPrev = totalsBeforeWeek(allWeeks, weekKey);
+  function buildWeekState(allWeeks, weekKey) {
+    const existing = allWeeks[weekKey] || {};
+    const absentList = existing.absent || [];
+    const activePeople = getActivePeople(absentList);
 
-    // Common
+    // baseScoreMap = done totals before this week (for balancing)
+    const totalsPrev = totalsBeforeWeek(allWeeks, weekKey);
+    const baseScoreMap = {};
+    for (const p of PEOPLE) baseScoreMap[p] = totalsPrev[p].done;
+
+    // Common: ensure 1 task each among active (as much as possible)
     const commonAssignments = assignCommonOneEach(
       COMMON_TASKS.map(t => ({...t, taskKey:`all:${t.id}`})),
-      totalsPrev,
-      mode
+      activePeople,
+      baseScoreMap
     );
 
-    // Bathrooms
+    // Bathrooms: assign within bathroom if possible, else fallback to active people
     const bathroomAssignments = [];
     for (const [bathName, members] of Object.entries(BATHROOMS)) {
       const tasks = BATHROOM_TASKS.map(t => ({
@@ -247,7 +353,13 @@
         pool: bathName,
         taskKey: `bath:${bathName}:${t.id}`
       }));
-      bathroomAssignments.push(...assignTasksGreedy(tasks, [...members], totalsPrev, mode));
+
+      const pool = members.filter(m => activePeople.includes(m));
+      const usePool = pool.length ? pool : activePeople;
+
+      bathroomAssignments.push(...assignTasksGreedy(tasks, usePool, baseScoreMap));
+      // update baseScoreMap so later assignments see updated loads
+      for (const a of bathroomAssignments) baseScoreMap[a.person] += 0; // (kept simple; common already handled)
     }
 
     const assignments = [...commonAssignments, ...bathroomAssignments].map(a => ({
@@ -258,15 +370,18 @@
       pool: a.pool ?? "all"
     }));
 
-    // if the week already exists, keep the checkmarks (done)
-    const existingDone = allWeeks[weekKey]?.done || {};
-    return { assignments, done: existingDone, mode, createdAt: allWeeks[weekKey]?.createdAt || new Date().toISOString() };
-  }
+    // keep done map but drop keys that no longer exist (after recompute)
+    const existingDone = existing.done || {};
+    const validKeys = new Set(assignments.map(a => a.taskKey));
+    const prunedDone = {};
+    for (const [k,v] of Object.entries(existingDone)) if (validKeys.has(k)) prunedDone[k] = !!v;
 
-  function prevWeekKey(weekKey) {
-    // weekKey: "YYYY-Www"
-    // Not used anymore (kept for compatibility)
-    return null;
+    return {
+      assignments,
+      done: prunedDone,
+      absent: absentList,
+      createdAt: existing.createdAt || new Date().toISOString()
+    };
   }
 
   /** =======================
@@ -286,7 +401,20 @@
 
     const map = {};
     for (const row of data) map[row.week_key] = row.state;
+    ensureMetaLocal(map);
     return map;
+  }
+
+  async function fetchWeekState(weekKey) {
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("state")
+      .eq("room_key", ROOM_KEY)
+      .eq("week_key", weekKey)
+      .single();
+
+    if (error) throw error;
+    return data.state;
   }
 
   async function upsertWeek(weekKey, state) {
@@ -295,33 +423,124 @@
     if (error) throw error;
   }
 
-  async function updateDone(weekKey, doneMap) {
-    // simple patch: read the row then rewrite state.done
-    const { data, error } = await supabase
-      .from(TABLE)
-      .select("state")
-      .eq("room_key", ROOM_KEY)
-      .eq("week_key", weekKey)
-      .single();
-    if (error) throw error;
+  async function insertWeekOnce(weekKey, state) {
+    const { error } = await supabase.from(TABLE).insert({
+      room_key: ROOM_KEY,
+      week_key: weekKey,
+      state,
+      updated_at: new Date().toISOString()
+    });
+    return error; // null if OK
+  }
 
-    const state = data.state;
+  async function updateDone(weekKey, doneMap) {
+    const state = await fetchWeekState(weekKey);
     state.done = doneMap;
     state.updatedAt = new Date().toISOString();
     await upsertWeek(weekKey, state);
   }
 
   /** =======================
-   *  UI rendering
+   *  “Bitch” logic (last finished week = previous week)
    *  ======================= */
+  function lastFinishedWeekKey(allWeeks, currentWeekKey) {
+    const keys = Object.keys(allWeeks).filter(k => k !== META_WEEK_KEY).sort();
+    let last = null;
+    for (const k of keys) {
+      if (k < currentWeekKey) last = k; else break;
+    }
+    return last;
+  }
+
+  function isBitchForWeek(weekState, person) {
+    const tasks = (weekState.assignments || []).filter(a => a.person === person);
+    if (!tasks.length) return false;
+    return tasks.some(t => !(weekState.done && weekState.done[t.taskKey]));
+  }
+
+  /** =======================
+   *  Weekly recap
+   *  ======================= */
+  function buildWeeklyRecap(allWeeks, currentWeekKey) {
+    const wk = lastFinishedWeekKey(allWeeks, currentWeekKey);
+    if (!wk) return "No finished week yet.";
+    const w = allWeeks[wk];
+
+    const lines = [];
+    lines.push(`🧹 Weekly recap — ${wk}`);
+
+    for (const p of PEOPLE) {
+      const assigned = (w.assignments || []).filter(a => a.person === p);
+      const done = assigned.filter(a => w.done && w.done[a.taskKey]);
+      const missing = assigned.filter(a => !(w.done && w.done[a.taskKey]));
+      const ptsDone = done.reduce((s,x)=>s+x.pts,0);
+      const ptsAss = assigned.reduce((s,x)=>s+x.pts,0);
+
+      lines.push(`\n${p}: ${ptsDone}/${ptsAss} pts`);
+      lines.push(`✅ Done: ${done.length ? done.map(x=>x.taskName).join(", ") : "(none)"}`);
+      if (missing.length) lines.push(`❌ Missing: ${missing.map(x=>x.taskName).join(", ")}`);
+    }
+
+    const bitchList = PEOPLE.filter(p => isBitchForWeek(w, p));
+    if (bitchList.length) lines.push(`\n💗 Bitch list: ${bitchList.join(", ")}`);
+    return lines.join("\n");
+  }
+
+  async function copyToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) {
+      // fallback
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      return true;
+    }
+  }
+
+  function openWhatsAppShare(text) {
+    const url = "https://wa.me/?text=" + encodeURIComponent(text);
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  /** =======================
+   *  UI
+   *  ======================= */
+  function renderAbsencesPanel(weekKey, allWeeks) {
+    const week = allWeeks[weekKey];
+    const absent = new Set(week.absent || []);
+    const wrap = document.getElementById("absences");
+    wrap.innerHTML = "";
+
+    for (const p of PEOPLE) {
+      const line = document.createElement("div");
+      line.className = "task";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = absent.has(p);
+      cb.dataset.person = p;
+      const lab = document.createElement("label");
+      lab.textContent = `${p} is away this week`;
+      line.appendChild(cb);
+      line.appendChild(lab);
+      wrap.appendChild(line);
+    }
+  }
+
   function render(weekKey, allWeeks) {
     const week = allWeeks[weekKey];
+    const absentList = week.absent || [];
+    const absentText = absentList.length ? ` — away: <span class="mono">${absentList.join(", ")}</span>` : "";
+    const adminBadge = isAdmin() ? ` — <span class="badge mono">ADMIN</span>` : ` — <span class="badge mono">USER</span>`;
+
     document.getElementById("weekLine").innerHTML =
-      `Current week: <span class="mono badge">${weekKey}</span> — timezone Europe/Rome`;
+      `Current week: <span class="mono badge">${weekKey}</span> — timezone Europe/Rome${adminBadge}${absentText}`;
 
-    document.getElementById("modeLabel").textContent = (week.mode === "assigned") ? "assigned" : "done";
-
-    // Schedule by person
+    // by person
     const byPerson = {};
     PEOPLE.forEach(p => byPerson[p] = []);
     for (const a of week.assignments) byPerson[a.person].push(a);
@@ -336,7 +555,7 @@
         <tr>
           <th>Person</th>
           <th>Tasks</th>
-          <th class="right">Points (week)</th>
+          <th class="right">Done / Assigned (week)</th>
         </tr>
       </thead>
     `;
@@ -344,7 +563,8 @@
 
     for (const p of PEOPLE) {
       const tasks = byPerson[p];
-      const ptsWeek = tasks.reduce((s,t)=>s+t.pts,0);
+      const ptsAssigned = tasks.reduce((s,t)=>s+t.pts,0);
+      const ptsDone = tasks.reduce((s,t)=> s + (week.done?.[t.taskKey] ? t.pts : 0), 0);
 
       const tdTasks = document.createElement("td");
       for (const t of tasks) {
@@ -357,12 +577,13 @@
         cb.addEventListener("change", async () => {
           const newDone = { ...(week.done || {}) };
           newDone[t.taskKey] = cb.checked;
-          week.done = newDone; // update local
+          week.done = newDone;
+
           setStatus("Saving…");
           try {
             await updateDone(weekKey, newDone);
             setStatus("OK (synced)");
-            renderScores(allWeeks); // refresh scores
+            renderScores(allWeeks, weekKey);
           } catch (e) {
             console.error(e);
             setStatus("Save error");
@@ -382,50 +603,55 @@
       tdP.innerHTML = `<span class="pill"><b>${p}</b></span>`;
       const tdPts = document.createElement("td");
       tdPts.className = "right";
-      tdPts.innerHTML = `<b>${ptsWeek}</b>`;
+      tdPts.innerHTML = `<b>${ptsDone}</b><span class="muted small"> / ${ptsAssigned}</span>`;
 
       tr.appendChild(tdP);
       tr.appendChild(tdTasks);
       tr.appendChild(tdPts);
       tbody.appendChild(tr);
     }
+
     table.appendChild(tbody);
     scheduleDiv.appendChild(table);
 
-    renderScores(allWeeks);
-    renderHistory(allWeeks);
+    renderScores(allWeeks, weekKey);
+    renderHistory(allWeeks, weekKey);
+
+    if (isAdmin()) renderAbsencesPanel(weekKey, allWeeks);
   }
 
-  function renderScores(allWeeks) {
+  function renderScores(allWeeks, currentWeekKey) {
     const kpis = document.getElementById("kpis");
     kpis.innerHTML = "";
 
-    // metric used to balance = current week's mode (last weekKey)
-    const keys = Object.keys(allWeeks).sort();
-    const currentMode = allWeeks[keys[keys.length - 1]]?.mode || "assigned";
-
     const totals = computeTotals(allWeeks);
-    const values = PEOPLE.map(p => scoreValue(totals, p, currentMode));
-    const min = Math.min(...values);
-    const max = Math.max(...values);
+    const doneValues = PEOPLE.map(p => totals[p].done);
+    const min = Math.min(...doneValues);
+    const max = Math.max(...doneValues);
+
+    const lastWk = lastFinishedWeekKey(allWeeks, currentWeekKey);
+    const lastState = lastWk ? allWeeks[lastWk] : null;
 
     for (const p of PEOPLE) {
-      const v = scoreValue(totals, p, currentMode);
+      const vDone = totals[p].done;
+      const status = (vDone === min) ? "ok" : (vDone === max ? "warn" : "");
+      const bitch = lastState ? isBitchForWeek(lastState, p) : false;
+      const bitchBadge = bitch ? `<span class="pink" style="margin-left:6px;">bitch</span>` : "";
+
       const box = document.createElement("div");
       box.className = "box";
-      const status = (v === min) ? "ok" : (v === max ? "warn" : "");
       box.innerHTML = `
-        <div><b>${p}</b></div>
-        <div class="mono ${status}">${v} pts</div>
-        <div class="muted small">assigned: ${totals[p].assigned} — done: ${totals[p].done}</div>
+        <div><b>${p}</b>${bitchBadge}</div>
+        <div class="mono ${status}" style="font-size:16px;">${Math.round(vDone*100)/100} done pts</div>
+        <div class="muted small">assigned total: ${totals[p].assigned}</div>
       `;
       kpis.appendChild(box);
     }
   }
 
-  function renderHistory(allWeeks) {
+  function renderHistory(allWeeks, currentWeekKey) {
     const histDiv = document.getElementById("history");
-    const keys = Object.keys(allWeeks).sort().reverse();
+    const keys = Object.keys(allWeeks).filter(k => k !== META_WEEK_KEY).sort().reverse();
     histDiv.innerHTML = "";
 
     const t = document.createElement("table");
@@ -435,6 +661,7 @@
           <th>Week</th>
           <th>Assigned</th>
           <th>Done</th>
+          <th>Away</th>
         </tr>
       </thead>
     `;
@@ -444,105 +671,136 @@
       const w = allWeeks[wk];
       const totA = (w.assignments || []).reduce((s,a)=>s+a.pts,0);
       const totD = (w.assignments || []).reduce((s,a)=> s + ((w.done && w.done[a.taskKey]) ? a.pts : 0), 0);
+      const away = (w.absent || []).join(", ");
+
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td><span class="mono">${wk}</span></td>
+        <td><span class="mono">${wk}</span>${wk === lastFinishedWeekKey(allWeeks, currentWeekKey) ? ' <span class="muted small">(last finished)</span>' : ''}</td>
         <td><b>${totA}</b></td>
         <td><b>${totD}</b></td>
+        <td class="muted small">${away || "-"}</td>
       `;
       tb.appendChild(tr);
     }
+
     t.appendChild(tb);
     histDiv.appendChild(t);
   }
 
   /** =======================
-   *  Boot + auto-generation
+   *  Boot: ensure meta + ensure current week exists (create-once)
    *  ======================= */
-  async function fetchWeekState(weekKey) {
-  const { data, error } = await supabase
-    .from(TABLE)
-    .select("state")
-    .eq("room_key", ROOM_KEY)
-    .eq("week_key", weekKey)
-    .single();
+  async function ensureMetaExists(allWeeks) {
+    ensureMetaLocal(allWeeks);
+    if (allWeeks[META_WEEK_KEY] && Object.keys(allWeeks[META_WEEK_KEY]).length) return;
 
-  if (error) throw error;
-  return data.state;
-}
+    // try read
+    try {
+      const state = await fetchWeekState(META_WEEK_KEY);
+      allWeeks[META_WEEK_KEY] = state;
+      ensureMetaLocal(allWeeks);
+      return;
+    } catch (e) {}
+
+    // insert once
+    const err = await insertWeekOnce(META_WEEK_KEY, allWeeks[META_WEEK_KEY]);
+    if (err) {
+      // someone else inserted -> read
+      const state = await fetchWeekState(META_WEEK_KEY);
+      allWeeks[META_WEEK_KEY] = state;
+      ensureMetaLocal(allWeeks);
+    }
+  }
 
   async function ensureCurrentWeek(allWeeks, weekKey) {
-  // 0) If we already have it locally, nothing to do
-  if (allWeeks[weekKey]) return;
+    if (allWeeks[weekKey]) return;
 
-  // 1) Try to read from DB first (fast path)
-  try {
-    const state = await fetchWeekState(weekKey);
+    // try read
+    try {
+      const state = await fetchWeekState(weekKey);
+      allWeeks[weekKey] = state;
+      return;
+    } catch (e) {}
+
+    // create state
+    const stateToInsert = buildWeekState(allWeeks, weekKey);
+
+    // insert once (create-once)
+    const err = await insertWeekOnce(weekKey, stateToInsert);
+    if (!err) {
+      allWeeks[weekKey] = stateToInsert;
+      return;
+    }
+
+    // insert failed -> read canonical
+    const canonical = await fetchWeekState(weekKey);
+    allWeeks[weekKey] = canonical;
+  }
+
+  async function recomputeWeekOverwrite(allWeeks, weekKey) {
+    if (!isAdmin()) throw new Error("Admin only");
+    const existing = allWeeks[weekKey] || await fetchWeekState(weekKey);
+    // keep absent list, keep done but prune invalid keys
+    allWeeks[weekKey] = existing;
+    const newState = buildWeekState(allWeeks, weekKey);
+    newState.absent = existing.absent || [];
+    await upsertWeek(weekKey, newState);
+    allWeeks[weekKey] = newState;
+  }
+
+  async function saveAbsencesAndRecompute(allWeeks, weekKey, absentNow) {
+    if (!isAdmin()) throw new Error("Admin only");
+
+    // 1) attach absences to week
+    const state = allWeeks[weekKey] || await fetchWeekState(weekKey);
+    state.absent = absentNow;
+
+    // 2) returners -> set done score to avg(done of others present)
+    setReturnersToAverageDone(allWeeks, weekKey, absentNow);
+    await saveMeta(allWeeks);
+
+    // 3) recompute week using updated absences
     allWeeks[weekKey] = state;
-    return;
-  } catch (e) {
-    // likely "not found" -> we'll create
+    const newState = buildWeekState(allWeeks, weekKey);
+    newState.absent = absentNow;
+
+    await upsertWeek(weekKey, newState);
+    allWeeks[weekKey] = newState;
   }
 
-  // 2) Build the week state
-  const lastKey = Object.keys(allWeeks).sort().pop();
-  const mode = lastKey ? (allWeeks[lastKey].mode || "assigned") : "assigned";
-  const stateToInsert = buildWeekState(allWeeks, weekKey, mode);
-
-  // 3) Attempt INSERT (create-once). If someone else creates it simultaneously,
-  //    INSERT will fail due to the primary key constraint, and we re-read.
-  const { error: insertError } = await supabase
-    .from(TABLE)
-    .insert({
-      room_key: ROOM_KEY,
-      week_key: weekKey,
-      state: stateToInsert,
-      updated_at: new Date().toISOString(),
-    });
-
-  if (!insertError) {
-    allWeeks[weekKey] = stateToInsert;
-    return;
-  }
-
-  // 4) If insert failed, re-read canonical state from DB (someone else created it)
-  const canonical = await fetchWeekState(weekKey);
-  allWeeks[weekKey] = canonical;
-}
-
-
-  async function recalcWeek(allWeeks, weekKey, mode) {
-    const state = buildWeekState(allWeeks, weekKey, mode);
-    allWeeks[weekKey] = state;
-    await upsertWeek(weekKey, state);
-  }
-
+  /** =======================
+   *  Main
+   *  ======================= */
   async function main() {
     setStatus("Loading…");
     const weekKey = isoWeekKey(new Date());
     let allWeeks = await fetchAllWeeks();
-
+    await ensureMetaExists(allWeeks);
     await ensureCurrentWeek(allWeeks, weekKey);
 
-    // Lock recompute so the schedule stays identical all week
+    // Admin-only UI
+    const admin = isAdmin();
+    document.getElementById("absencesPanel").style.display = admin ? "" : "none";
+
+    // Recompute button: admin only (and potentially destructive)
     const genBtn = document.getElementById("btnGenerate");
-    genBtn.disabled = true;
-    genBtn.textContent = "Locked (this week)";
-    const modeBtn = document.getElementById("btnToggleMode");
-    modeBtn.disabled = true;
-
-
+    genBtn.disabled = !admin;
+    genBtn.textContent = admin ? "Recompute this week (admin)" : "Locked (admin only)";
 
     setStatus("OK (synced)");
     render(weekKey, allWeeks);
 
-    // Buttons
-    document.getElementById("btnGenerate").onclick = async () => {
+    // Admin recompute
+    genBtn.onclick = async () => {
+      if (!isAdmin()) return alert("Admin only.");
+      const ok = confirm("This will recompute the schedule for the current week and may change assignments. Continue?");
+      if (!ok) return;
+
       setStatus("Recomputing…");
       try {
         allWeeks = await fetchAllWeeks();
-        const mode = allWeeks[weekKey]?.mode || "assigned";
-        await recalcWeek(allWeeks, weekKey, mode);
+        await ensureMetaExists(allWeeks);
+        await recomputeWeekOverwrite(allWeeks, weekKey);
         setStatus("OK (recomputed)");
         render(weekKey, allWeeks);
       } catch (e) {
@@ -552,25 +810,61 @@
       }
     };
 
-    document.getElementById("btnToggleMode").onclick = async () => {
-      setStatus("Switching mode…");
+    // Save absences
+    const saveAbsBtn = document.getElementById("btnSaveAbsences");
+    if (saveAbsBtn) {
+      saveAbsBtn.onclick = async () => {
+        if (!isAdmin()) return alert("Admin only.");
+
+        const absentNow = [];
+        document.querySelectorAll("#absences input[type=checkbox]").forEach(cb => {
+          if (cb.checked) absentNow.push(cb.dataset.person);
+        });
+
+        setStatus("Saving absences…");
+        try {
+          allWeeks = await fetchAllWeeks();
+          await ensureMetaExists(allWeeks);
+          await saveAbsencesAndRecompute(allWeeks, weekKey, absentNow);
+          setStatus("OK (absences saved)");
+          render(weekKey, allWeeks);
+        } catch (e) {
+          console.error(e);
+          setStatus("Absences error");
+          alert("Error: could not save absences. See console.");
+        }
+      };
+    }
+
+    // Weekly recap copy
+    document.getElementById("btnRecapCopy").onclick = async () => {
       try {
         allWeeks = await fetchAllWeeks();
-        const current = allWeeks[weekKey];
-        const newMode = (current.mode === "assigned") ? "done" : "assigned";
-        await recalcWeek(allWeeks, weekKey, newMode);
-        setStatus("OK (mode switched)");
-        render(weekKey, allWeeks);
+        const text = buildWeeklyRecap(allWeeks, weekKey);
+        await copyToClipboard(text);
+        alert("Weekly recap copied to clipboard ✅");
       } catch (e) {
         console.error(e);
-        setStatus("Mode switch error");
-        alert("Error: could not switch mode. See console.");
+        alert("Could not build recap. See console.");
       }
     };
 
+    // Weekly recap WhatsApp
+    document.getElementById("btnRecapWA").onclick = async () => {
+      try {
+        allWeeks = await fetchAllWeeks();
+        const text = buildWeeklyRecap(allWeeks, weekKey);
+        openWhatsAppShare(text);
+      } catch (e) {
+        console.error(e);
+        alert("Could not build recap. See console.");
+      }
+    };
+
+    // Export
     document.getElementById("btnExport").onclick = () => {
       const week = allWeeks[weekKey];
-      const blob = new Blob([JSON.stringify({weekKey, roomKey: ROOM_KEY, state: week}, null, 2)], {type:"application/json"});
+      const blob = new Blob([JSON.stringify({weekKey, roomKey: ROOM_KEY, state: week, meta: allWeeks[META_WEEK_KEY]}, null, 2)], {type:"application/json"});
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -579,14 +873,13 @@
       URL.revokeObjectURL(url);
     };
 
-    // Realtime: if someone else checks a task, update the screen
+    // Realtime updates
     try {
       const channel = supabase.channel("coloc-weeks-realtime");
       channel.on(
         "postgres_changes",
         { event: "*", schema: "public", table: TABLE, filter: `room_key=eq.${ROOM_KEY}` },
-        async (payload) => {
-          // light reload
+        async () => {
           allWeeks = await fetchAllWeeks();
           render(weekKey, allWeeks);
           setStatus("OK (live update)");
@@ -595,7 +888,6 @@
       await channel.subscribe();
     } catch (e) {
       console.warn("Realtime not active", e);
-      // Not blocking: the page still works
     }
   }
 
